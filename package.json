@@ -1,0 +1,19 @@
+{
+  "name": "neowarp-ai-cli",
+  "version": "1.0.0",
+  "description": "NeoWarpAI CLI — NeoWarp AI 编程助手的命令行版：积木 DSL 引擎与工具协议复用自 NeoWarp (TurboWarp Desktop)",
+  "bin": {
+    "neowarp-ai": "bin/neowarp-ai.js"
+  },
+  "main": "bin/neowarp-ai.js",
+  "scripts": {
+    "extract-engine": "node scripts/extract-dsl-engine.js",
+    "selftest": "node bin/neowarp-ai.js dsl roundtrip",
+    "demo": "node bin/neowarp-ai.js run \"用 mock 演示\" --mock-script demo/mock-conversation.json --project demo/demo.sb3 --save"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "GPL-3.0",
+  "private": true
+}
