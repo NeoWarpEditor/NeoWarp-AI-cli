@@ -27,50 +27,58 @@ const { buildSystemPrompt } = require('../lib/prompt');
 const { runConversationLoop } = require('../lib/loop');
 const store = require('../lib/store');
 
-// ── ANSI ─────────────────────────────────────────────────────
-const NO_COLOR = process.argv.includes('--no-color') || !process.stdout.isTTY;
-const c = (code, s) => (NO_COLOR ? String(s) : '\x1b[' + code + 'm' + s + '\x1b[0m');
-const gray = s => c('90;2', s);
-const yellow = s => c('33', s);
-const green = s => c('32', s);
-const red = s => c('31', s);
-const cyan = s => c('36', s);
-const bold = s => c('1', s);
+// ── 终端 UI 设计系统（Apple Design 风格，见 lib/ui.js）───────
+const UI = require('../lib/ui');
+const { NO_COLOR } = UI;
+const gray = UI.paint.secondary;
+const yellow = UI.paint.orange;
+const green = UI.paint.green;
+const red = UI.paint.red;
+const cyan = UI.paint.blue;
+const bold = UI.paint.bold;
 
 function colorEnabled () { return !NO_COLOR; }
-const REASONING_COLOR = s => (NO_COLOR ? s : '\x1b[90;2m' + s + '\x1b[0m');
 
 function banner () {
-  console.log(bold(cyan('NeoWarpAI CLI')) + gray(' · NeoWarp AI 编程助手 · 命令行版'));
-  console.log(gray('积木 DSL 引擎与工具协议复用自 NeoWarp (TurboWarp Desktop) AI 助手'));
-  console.log(gray('输入 /help 查看会话内命令，/exit 退出\n'));
+  console.log(UI.banner(require('../package.json').version));
+  console.log('');
+  console.log(UI.divider());
+  console.log('');
+  console.log(gray('输入 /help 查看会话内命令，/exit 退出'));
 }
 
 function usage () {
-  console.log(`用法: neowarp-ai <命令> [参数]
+  const cmd = UI.paint.blue;
+  console.log(`用法: ${UI.paint.bold('neowarp-ai')} <命令> [参数]
 
-命令:
-  chat                        交互式对话（REPL，流式输出 + 工具调用）
-      --project <file.sb3>    加载项目（.sb3/.np1，无则跑在内存新项目上）
-      --save                  每次工具修改后自动保存回项目文件
-      --model <id>            临时使用指定模型配置
-      --session <id>          恢复指定会话
-      --mock-script <f.json>  mock 模型对话脚本（无网络演示/测试）
-  run "任务描述"              单发执行（选项同 chat，跑完即退）
-  models list                 列出模型配置（兼容桌面版 tw_config.json 格式）
-  models add                  交互式添加配置
-  models use <id|序号>        切换激活配置
-  models remove <id|序号>     删除配置
-  models key <id|序号> <key>  设置 API Key
-  models test [id|序号]       连通性测试
-  models import <tw_config.json>  导入桌面版配置
-  project new <file.sb3>      新建空白项目
-  project info [--project f]  查看项目概况
-  project scripts <角色>      查看角色脚本（DSL）
-  project undo [--project f]  回滚到最近一次 AI 修改前快照
-  project snapshots [--project f]  列出快照
-  dsl roundtrip               DSL 引擎往返自检
-  help                        显示本帮助`);
+${UI.paint.bold('对话')}
+  ${cmd('chat')}                        交互式对话（REPL，流式输出 + 工具调用）
+      ${gray('--project <file.sb3>')}   加载项目（.sb3/.np1，无则跑在内存新项目上）
+      ${gray('--save')}                 每次工具修改后自动保存回项目文件
+      ${gray('--model <id>')}           临时使用指定模型配置
+      ${gray('--session <id>')}         恢复指定会话
+      ${gray('--mock-script <f.json>')} mock 模型对话脚本（无网络演示/测试）
+  ${cmd('run')} "任务描述"              单发执行（选项同 chat，跑完即退）
+
+${UI.paint.bold('模型')}
+  ${cmd('models')} list                 列出模型配置（兼容桌面版 tw_config.json 格式）
+  ${cmd('models')} add                  交互式添加配置
+  ${cmd('models')} use <id|序号>        切换激活配置
+  ${cmd('models')} remove <id|序号>     删除配置
+  ${cmd('models')} key <id|序号> <key>  设置 API Key
+  ${cmd('models')} test [id|序号]       连通性测试
+  ${cmd('models')} import <tw_config.json>  导入桌面版配置
+
+${UI.paint.bold('项目')}
+  ${cmd('project')} new <file.sb3>      新建空白项目
+  ${cmd('project')} info [--project f]  查看项目概况
+  ${cmd('project')} scripts <角色>      查看角色脚本（DSL）
+  ${cmd('project')} undo [--project f]  回滚到最近一次 AI 修改前快照
+  ${cmd('project')} snapshots [--project f]  列出快照
+
+${UI.paint.bold('工具')}
+  ${cmd('dsl')} roundtrip               DSL 引擎往返自检
+  ${cmd('help')}                        显示本帮助`);
 }
 
 // ── 项目上下文 ───────────────────────────────────────────────
@@ -111,7 +119,8 @@ function projectSummary (storeObj) {
 
 // ── 修改后处理（快照 + 自动保存）───────────────────────────
 
-function makeModifyWatcher (storeObj, opts, state) {
+/** 修改追踪器：首次修改前快照、每次修改落盘。提示统一走 renderer.note 协调。 */
+function makeModifyWatcher (storeObj, opts, state, note) {
   return {
     beforeFirstModify () {
       if (state.snapshotted) return;
@@ -119,7 +128,7 @@ function makeModifyWatcher (storeObj, opts, state) {
       if (storeObj.sourcePath && fs.existsSync(storeObj.sourcePath)) {
         try {
           const snap = store.takeSnapshot(storeObj.sourcePath, 'pre-ai');
-          process.stderr.write('\n  ' + gray('· 已保存快照 ' + path.basename(snap) + '（project undo 可回滚）'));
+          note('已保存快照 ' + path.basename(snap) + '（project undo 可回滚）');
         } catch (e) { /* 快照失败不阻塞 */ }
       }
     },
@@ -127,9 +136,9 @@ function makeModifyWatcher (storeObj, opts, state) {
       if (opts.save && storeObj.sourcePath) {
         try {
           saveProject(storeObj.flush(), storeObj.assets, storeObj.sourcePath);
-          process.stderr.write('\n  ' + gray('· 已保存 → ' + storeObj.sourcePath));
+          state.savedThisCall = (state.savedThisCall || 0) + 1;
         } catch (e) {
-          process.stderr.write('\n  ' + red('· 保存失败: ' + e.message));
+          note('保存失败: ' + e.message, true);
         }
       }
     }
@@ -159,40 +168,78 @@ function wrapBackendWithWatcher (backend, watcher) {
 
 // ── 终端渲染器 ───────────────────────────────────────────────
 
-function createRenderer () {
+/**
+ * 流式渲染器（行式模型）。
+ * 工具行在 onToolStart 即闭合换行，结果/提示行独立输出 —— 并行多工具
+ * （Promise.all 交错回调）也不会错位。state.savedThisCall 由 watcher 每次
+ * 成功落盘后自增，onToolEnd 时据此在结果行追加"已保存"标记，避免刷屏。
+ */
+function createRenderer (state) {
   let inReasoning = false;
+  let spin = null;          // 等待模型响应的 spinner
+  let toolStartedAt = 0;
+  let lastToolName = '';    // 最近一次 onToolStart 的工具名（并行归属判断）
+  let lastWasTool = false;  // 连续工具行之间不加空行
+
+  const stopSpin = () => {
+    if (spin) { spin.stop(); spin = null; }
+  };
+
   return {
     onRoundStart (n) {
+      stopSpin();
+      if (inReasoning) { process.stdout.write('\n'); inReasoning = false; }
       if (n > 1) process.stdout.write('\n');
+      lastWasTool = false;
+      spin = UI.spinner('思考中');
+      spin.start();
     },
     onText (t) {
-      if (inReasoning) { process.stdout.write('\n'); inReasoning = false; }
+      if (spin) stopSpin();
+      if (inReasoning) { process.stdout.write('\n\n'); inReasoning = false; }
+      lastWasTool = false;
       process.stdout.write(t);
     },
     onReasoning (t) {
+      if (spin) stopSpin();
       if (!inReasoning) {
-        if (inReasoning === false && t) process.stdout.write('\n');
+        process.stdout.write('  ' + UI.paint.tertiary(UI.sym.think + ' 思考\n'));
         inReasoning = true;
+        lastWasTool = false;
       }
-      process.stdout.write(REASONING_COLOR(t));
+      process.stdout.write(UI.paint.tertiary(t));
+    },
+    /** 插入提示行（快照、保存失败等），行式独立输出。 */
+    note (text, isError) {
+      process.stdout.write('    ' + (isError ? UI.paint.red(UI.sym.fail + ' ' + text) : UI.paint.tertiary(UI.sym.dot + ' ' + text)) + '\n');
     },
     onToolStart (name, args, fixed) {
-      if (inReasoning) { process.stdout.write('\n'); inReasoning = false; }
-      let brief = '';
-      try {
-        const a = typeof args === 'object' ? args : {};
-        brief = JSON.stringify(a);
-        if (brief.length > 120) brief = brief.slice(0, 120) + '…';
-      } catch (e) { brief = ''; }
-      process.stdout.write('\n' + yellow('  ⚙ ' + name) + gray((fixed ? ' (宽松JSON修复)' : '') + ' ' + brief));
+      stopSpin();
+      if (inReasoning) { process.stdout.write('\n\n'); inReasoning = false; }
+      toolStartedAt = Date.now();
+      lastToolName = name;
+      const brief = UI.toolBrief(name, args);
+      const note2 = fixed ? ' ' + gray('(JSON 已自动修复)') : '';
+      const tail = brief ? ' ' + UI.paint.tertiary(brief) : '';
+      // 行式渲染：工具行立即闭合，结果行独立输出 —— 并行多工具不会错位
+      process.stdout.write((lastWasTool ? '' : '\n') + '  ' + UI.paint.blue(UI.sym.tool) + ' ' + UI.paint.text(name) + tail + note2 + '\n');
+      lastWasTool = true;
     },
     onToolEnd (name, result) {
+      const ms = Date.now() - toolStartedAt;
+      const savedCount = state ? (state.savedThisCall || 0) : 0;
+      if (state) state.savedThisCall = 0;
+      const saved = savedCount > 0
+        ? ' ' + UI.paint.tertiary(UI.sym.dot + ' 已保存')
+        : '';
+      const owner = name === lastToolName ? '' : UI.paint.secondary(name) + ' ' + UI.paint.tertiary(UI.sym.dot) + ' ';
       if (result && result.success) {
-        process.stdout.write(green(' ✓\n'));
+        process.stdout.write('    ' + UI.paint.green(UI.sym.ok) + ' ' + owner + UI.paint.tertiary(ms + 'ms' + saved) + '\n');
       } else {
         const msg = (result && result.error) ? String(result.error).split('\n')[0].slice(0, 160) : '未知错误';
-        process.stdout.write(red(' ✗ ' + msg + '\n'));
+        process.stdout.write('    ' + UI.paint.red(UI.sym.fail + ' ' + owner + msg) + '\n');
       }
+      lastWasTool = true;
     }
   };
 }
@@ -202,9 +249,9 @@ function askIo () {
     prompt (question, options) {
       return new Promise(resolve => {
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-        let text = yellow('  ? ' + question + '\n');
-        (options || []).forEach((o, i) => { text += '    ' + (i + 1) + '. ' + o + '\n'; });
-        text += gray('  输入序号或自定义回答: ');
+        let text = '\n  ' + UI.paint.orange('? ') + question + '\n';
+        (options || []).forEach(o => { text += '  ' + UI.paint.secondary(UI.sym.dot) + ' ' + o + '\n'; });
+        text += '  ' + UI.paint.blue(UI.sym.prompt) + ' ';
         rl.question(NO_COLOR ? text.replace(/\x1b\[[0-9;]*m/g, '') : text, ans => {
           rl.close();
           const n = Number(ans);
@@ -254,8 +301,9 @@ function resolveCfg (opts) {
 async function executeTask (opts, userInput, session) {
   const cfg = resolveCfg(opts);
   const storeObj = session.projectStore || loadProjectContext(opts);
-  const state = { snapshotted: false };
-  const watcher = makeModifyWatcher(storeObj, opts, state);
+  const state = { snapshotted: false, savedThisCall: 0 };
+  const render = createRenderer(state);
+  const watcher = makeModifyWatcher(storeObj, opts, state, (text, isError) => render.note(text, isError));
   const backend = wrapBackendWithWatcher(new ToolBackend(storeObj, askIo()), watcher);
   const endpointModel = config.resolveEndpointAndModel(cfg);
 
@@ -270,13 +318,23 @@ async function executeTask (opts, userInput, session) {
     messages.push({ role: 'user', content: userInput });
   }
 
-  process.stdout.write(gray('[' + cfg.name + ' · ' + endpointModel.model + (endpointModel.endpoint && apiLabel(endpointModel.apiFormat) ? ' · ' + apiLabel(endpointModel.apiFormat) : '') + ']\n'));
+  const fmt = apiLabel(endpointModel.apiFormat);
+  process.stdout.write('\n' + UI.contextLine({
+    model: cfg.name + ' ' + UI.sym.dot + ' ' + endpointModel.model,
+    format: fmt && !cfg.name.includes(fmt) ? fmt : null,
+    project: storeObj.sourcePath ? path.basename(storeObj.sourcePath) : null
+  }) + '\n');
 
-  const render = createRenderer();
+  const startedAt = Date.now();
   const out = await runConversationLoop({
     messages, cfg, endpointModel, tools: TOOLS, backend, render, mockScript: opts.mockScript
   });
+  const seconds = (Date.now() - startedAt) / 1000;
 
+  process.stdout.write('\n' + UI.summaryLine({ rounds: out.rounds, toolCalls: out.toolCalls, seconds, aborted: out.aborted }) + '\n');
+  if (out.error) {
+    process.stdout.write('  ' + red(UI.sym.fail + ' ' + out.error.message) + '\n');
+  }
   process.stdout.write('\n');
   return { messages, projectStore: storeObj, out };
 }
@@ -309,19 +367,19 @@ async function cmdChat (opts) {
     console.log(gray('项目: ' + (session.projectStore.sourcePath || '（新内存项目）')));
   }
 
+  const PROMPT = '  ' + UI.paint.blue(UI.sym.prompt) + ' ';
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: cyan('you › ')
+    prompt: PROMPT
   });
 
   const ask = q => new Promise(res => rl.question(q, res));
 
-  rl.prompt();
   for (;;) {
     let line;
     try {
-      line = await ask(cyan('you › '));
+      line = await ask(PROMPT);
     } catch (e) {
       break; // EOF
     }
@@ -333,34 +391,34 @@ async function cmdChat (opts) {
       console.log(gray('  /exit 退出 · /clear 清空会话 · /model 切换模型 · /save 立即保存项目 · /undo 回滚快照 · /info 项目概况'));
       continue;
     }
-    if (input === '/clear') { session.messages = []; console.log(gray('会话已清空')); continue; }
+    if (input === '/clear') { session.messages = []; console.log(green('  ' + UI.sym.ok + ' 会话已清空')); continue; }
     if (input === '/model') {
       listModels();
       const pick = await ask(gray('  输入序号切换（回车取消）: '));
       const all = config.getModelConfigs().configs;
       const cfg = all[Number(pick) - 1];
-      if (cfg) { config.saveStore(all, cfg.id); console.log(green('已切换到 ' + cfg.name)); }
+      if (cfg) { config.saveStore(all, cfg.id); console.log(green('  ' + UI.sym.ok + ' 已切换到 ' + cfg.name)); }
       continue;
     }
     if (input === '/save') {
       if (session.projectStore && session.projectStore.sourcePath) {
         saveProject(session.projectStore.flush(), session.projectStore.assets, session.projectStore.sourcePath);
-        console.log(green('已保存 → ' + session.projectStore.sourcePath));
+        console.log(green('  ' + UI.sym.ok + ' 已保存 ' + UI.sym.arrow + ' ' + session.projectStore.sourcePath));
       } else {
         const p = await ask(gray('  保存到路径（.sb3）: '));
         if (p && p.trim()) {
           session.projectStore.sourcePath = p.trim();
           saveProject(session.projectStore.flush(), session.projectStore.assets, p.trim());
-          console.log(green('已保存 → ' + p.trim()));
+          console.log(green('  ' + UI.sym.ok + ' 已保存 ' + UI.sym.arrow + ' ' + p.trim()));
         }
       }
       continue;
     }
     if (input === '/undo') {
       const src = session.projectStore && session.projectStore.sourcePath;
-      if (!src) { console.log(red('没有关联的项目文件')); continue; }
+      if (!src) { console.log(red('  没有关联的项目文件')); continue; }
       const r = store.undoSnapshot(src);
-      console.log(r ? green('已回滚 ' + r.restored + ' ← ' + path.basename(r.from)) : red('没有可用快照'));
+      console.log(r ? green('  ' + UI.sym.ok + ' 已回滚 ' + r.restored) : red('  没有可用快照'));
       session.projectStore = loadProjectContext({ project: src });
       continue;
     }
@@ -369,20 +427,21 @@ async function cmdChat (opts) {
       console.log(JSON.stringify(backend.getProjectInfo(), null, 2));
       continue;
     }
-    if (input.startsWith('/')) { console.log(red('未知命令 ' + input)); continue; }
+    if (input.startsWith('/')) { console.log(red('  未知命令 ' + input)); continue; }
 
     try {
       const { messages, projectStore, out } = await executeTask(opts, input, session);
       session.messages = messages;
       session.projectStore = projectStore;
       session.updated = new Date().toISOString();
-      if (out.error) console.log(red('错误: ' + out.error.message));
+      if (out.error) console.log(red('  ' + UI.sym.fail + ' ' + out.error.message));
       store.saveSession(session.id, { id: session.id, model: (resolveCfg(opts)).name, messages: messages.filter(m => m.role !== 'system' || true), updated: session.updated });
     } catch (err) {
-      console.log(red('执行失败: ' + err.message));
+      console.log(red('  ' + UI.sym.fail + ' 执行失败: ' + err.message));
     }
   }
-  console.log(gray('再见。会话已保存: ' + session.id + '（--session ' + session.id + ' 可恢复）'));
+  console.log('\n' + UI.divider());
+  console.log(gray('  再见。会话已保存: ' + session.id + '（--session ' + session.id + ' 可恢复）\n'));
 }
 
 async function cmdRun (opts) {
@@ -395,14 +454,14 @@ async function cmdRun (opts) {
     process.exit(2);
   }
   if (opts.json) {
-    console.log('\n' + JSON.stringify({
+    console.log(JSON.stringify({
       rounds: out.rounds,
       toolCalls: out.toolCalls,
       messages: messages.filter(m => m.role === 'assistant').map(m => m.content)
     }, null, 2));
   }
   if (!opts.save && projectStore.sourcePath) {
-    console.log(gray('提示: 加 --save 可把修改自动写回项目文件；或用 /save（chat 模式）手动保存。'));
+    console.log(gray('  提示: 加 --save 可把修改自动写回项目文件；或用 /save（chat 模式）手动保存。'));
   }
 }
 
@@ -410,19 +469,23 @@ async function cmdRun (opts) {
 
 function listModels () {
   const { configs, activeId } = config.getModelConfigs();
-  console.log(bold('模型配置') + gray('（' + config.configPath() + '）'));
+  console.log('  ' + UI.paint.bold('模型配置') + UI.paint.tertiary('  ' + UI.sym.dot + '  ' + config.configPath()));
+  console.log('');
   configs.forEach((x, i) => {
     const active = x.id === activeId;
-    const prov = PROVIDERS[x.provider] ? PROVIDERS[x.provider].name : x.provider;
+    const provRaw = PROVIDERS[x.provider] ? PROVIDERS[x.provider].name : x.provider;
+    const prov = provRaw.split('（')[0].split(' (')[0]; // 短名，去掉括号说明
     console.log(
-      '  ' + (active ? green('●') : gray('○')) + ' ' +
-      String(i + 1).padStart(2) + '. ' + bold(x.name || x.id) +
-      gray('  [' + prov + ' · ' + (x.apiFormat || 'openai') + ']') +
-      gray('  model=' + (x.customModelId || x.model || '(默认)') + '  key=' + config.maskKey(x.apiKey)) +
-      (x.customEndpoint ? gray('  endpoint=' + x.customEndpoint) : '') +
-      (active ? green('  ← 当前') : '')
+      '  ' + (active ? UI.paint.green(UI.sym.flag) : UI.paint.tertiary(UI.sym.circle)) + ' ' +
+      String(i + 1).padStart(2) + '. ' + UI.paint.bold(x.name || x.id) +
+      UI.paint.tertiary('  ' + prov + ' ' + UI.sym.dot + ' ' + (x.apiFormat || 'openai') +
+        ' ' + UI.sym.dot + ' ' + (x.customModelId || x.model || '(默认)') +
+        ' ' + UI.sym.dot + ' key ' + config.maskKey(x.apiKey)) +
+      (active ? '  ' + UI.paint.green('当前') : '')
     );
   });
+  if (!configs.length) console.log('  ' + UI.paint.tertiary('（空）'));
+  console.log('');
 }
 
 async function cmdModels (opts) {
@@ -539,7 +602,7 @@ function cmdProject (opts) {
     const file = opts._[2];
     if (!file) { console.error(red('用法: project new <file.sb3>')); process.exit(1); }
     saveProject(blankProject(path.basename(file, path.extname(file))), [], file);
-    console.log(green('已创建空白项目 → ' + file));
+    console.log(green('  ' + UI.sym.ok + ' 已创建空白项目 ' + UI.sym.arrow + ' ' + file));
     return;
   }
   const storeObj = loadProjectContext(opts);
@@ -558,8 +621,8 @@ function cmdProject (opts) {
     const src = storeObj.sourcePath;
     if (!src) { console.error(red('项目文件未保存到磁盘，无法回滚')); process.exit(1); }
     const r = store.undoSnapshot(src);
-    if (r) console.log(green('已回滚 ' + r.restored + ' ← ' + path.basename(r.from)));
-    else { console.log(red('没有可用快照')); process.exit(1); }
+    if (r) console.log(green('  ' + UI.sym.ok + ' 已回滚 ' + r.restored + ' ' + UI.paint.tertiary(UI.sym.arrow + ' ' + path.basename(r.from))));
+    else { console.log(red('  ' + UI.sym.fail + ' 没有可用快照')); process.exit(1); }
   } else {
     console.error(red('未知子命令: project ' + sub));
     process.exit(1);
@@ -641,7 +704,7 @@ function cmdDslRoundtrip () {
     if (v.errors.length) { pass++; console.log(green('  ✓ reject: ' + name)); }
     else { fail++; console.log(red('  ✗ reject: ' + name + '（未被拒绝！）')); }
   }
-  console.log('\n' + (fail === 0 ? green('全部通过') : red('存在失败')) + gray('（' + pass + ' 通过 / ' + fail + ' 失败）'));
+  console.log('\n  ' + (fail === 0 ? UI.paint.green(UI.sym.ok + ' 全部通过') : UI.paint.red(UI.sym.fail + ' 存在失败')) + UI.paint.tertiary('  ' + UI.sym.dot + '  ' + pass + ' 通过 / ' + fail + ' 失败'));
   process.exit(fail === 0 ? 0 : 1);
 }
 
