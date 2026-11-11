@@ -667,6 +667,6 @@ async function main () {
 }
 
 main().catch(err => {
-  console.error(red('未处理错误: ' + (err.stack || err.message)));
+  console.error(err.expected ? red('错误: ' + err.message) : red('未处理错误: ' + (err.stack || err.message)));
   process.exit(1);
 });

@@ -64,4 +64,4 @@ npm run demo       # Mock 模型端到端：建角色→建变量→写脚本→
 
 ## 许可
 
-与 NeoWarp 上游一致，GPL-3.0。
+与 NeoWarp / TurboWarp 上游一致，**GPL-3.0-or-later**（完整文本见仓库根目录 [LICENSE](LICENSE)）。
