@@ -209,8 +209,11 @@ function createRenderer (state) {
       }
       process.stdout.write(UI.paint.tertiary(t));
     },
-    /** 插入提示行（快照、保存失败等），行式独立输出。 */
+    /** 插入提示行（快照、保存失败、断连重试等），行式独立输出。 */
     note (text, isError) {
+      // 重试提示可能在等待模型时出现：先收掉 spinner，避免提示与动画叠在一起
+      stopSpin();
+      if (inReasoning) { process.stdout.write('\n'); inReasoning = false; }
       process.stdout.write('    ' + (isError ? UI.paint.red(UI.sym.fail + ' ' + text) : UI.paint.tertiary(UI.sym.dot + ' ' + text)) + '\n');
     },
     onToolStart (name, args, fixed) {
@@ -499,7 +502,7 @@ async function cmdModels (opts) {
     console.log(bold('添加模型配置') + gray('（与桌面版 tw_config.json 同格式）'));
     const provKeys = Object.keys(PROVIDERS);
     console.log('  供应商: ' + provKeys.map((k, i) => (i + 1) + '=' + PROVIDERS[k].name).join('  '));
-    const provPick = await ask('选择供应商 [1-' + provKeys.length + ']（回车=7/自定义或输入名称）: ');
+    const provPick = await ask('选择供应商 [1-' + provKeys.length + ']（回车=自定义或输入名称）: ');
     let provKey = 'custom';
     const n = Number(provPick);
     if (Number.isInteger(n) && provKeys[n - 1]) provKey = provKeys[n - 1];
